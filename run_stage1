@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name=ARGsOAP_animals
+#SBATCH --account=def-mhoude           # ComputeCanada account
+#SBATCH --time=36:00:00                
+#SBATCH --mem=256G                     
+#SBATCH --cpus-per-task=16             
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+#SBATCH --mail-user=dliang53@xxxx.ca       #Recieve email notif
+#SBATCH --mail-type=ALL                    # Options: BEGIN, END, FAIL, ALL
+
+# Load Python and virtual environment
+module load python/3.11
+source ~/envs/args_env/bin/activate
+
+# Load necessary tools
+module load diamond
+module load bwa
+module load samtools
+module load blast+
+
+# Ensure log and output directories exist
+mkdir -p logs output_[Data_Name]
+
+# Run ARGs-OAP Stage One on FASTQ files
+args_oap stage_one \
+  -i /home/dliang53/scratch/ECCC/[Folder_Name] \ #Pathway to datasets
+  -o output_[Data_Name] \
+  -f fastq \
+  -t 16   #Number of CPU threads 
