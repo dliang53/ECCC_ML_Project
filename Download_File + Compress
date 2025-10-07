@@ -1,0 +1,10 @@
+# Downloads metagenomic dataset using their accession number 
+# Split_files splits the file into _1 (foward) and _2 (reverse) reads 
+
+fasterq-dump --split_files [ACCESSION_NUM]
+
+# Compress metagenomic data
+# Need to download pigz file into directory 
+# https://zlib.net/pigz/
+
+pigz -k filename # -k keeps the original file name
