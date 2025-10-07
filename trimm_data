@@ -1,0 +1,29 @@
+#!/bin/bash
+#SBATCH --job-name=trimm_[FOLDER_NAME]
+#SBATCH --account=def-mhoude           # ComputeCanada Account
+#SBATCH --time=24:00:00                
+#SBATCH --mem=200G                     
+#SBATCH --cpus-per-task=16             # More CPU threads
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+#SBATCH --mail-user=dliang53@XXXX.ca        # Replace with your actual email
+#SBATCH --mail-type=ALL                     # Options: BEGIN, END, FAIL, ALL
+
+module load fastp 
+
+for fq1 in /home/dliang53/scratch/ECCC/data/animals/*_1.fastq.gz; do
+    fq2=${fq1/_1.fastq.gz/_2.fastq.gz}
+    sample=$(basename "$fq1" _1.fastq.gz)
+    
+    echo "Running fastp on $sample"
+
+    fastp \
+      -i "$fq1" \
+      -I "$fq2" \
+      -o "/home/dliang53/scratch/ECCC/data/trimmed_[FOLDER_NAME]/${sample}_1.trimmed.fastq.gz" \
+      -O "/home/dliang53/scratch/ECCC/data/trimmed_[FOLDER_NAME]/${sample}_2.trimmed.fastq.gz" \
+      --length_limit 100 \          # Trim down to 100bp
+      --thread 16 \
+      --detect_adapter_for_pe \
+
+done
