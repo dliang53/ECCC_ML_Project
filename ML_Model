@@ -1,0 +1,141 @@
+# This is ALL DONE IN R
+
+# Load in necessary libraries
+library(readxl)
+library(caret)
+library(nnet)
+library(dplyr)
+library(reshape2)
+library(xgboost)
+
+# Load data
+df <- read_excel("[PATH_TO_FILE]/Model_Train_only_1.xlsx") # Excel contains ARGs and amount per sample
+df$Source_Label <- as.factor(df$Source_Label)
+df <- df[, !(names(df) %in% c("Sample_ID"))]
+
+# RANDOM FOREST MODEL CREATION 
+# Downsample to balance classes (match smallest class size)
+min_class_size <- df %>%
+  group_by(Source_Label) %>%
+  tally() %>%
+  pull(n) %>%
+  min()
+
+set.seed(123)
+balanced_df <- df %>%
+  group_by(Source_Label) %>%
+  sample_n(min_class_size) %>%
+  ungroup()
+
+df_reduced <- balanced_df#[, c("Source_Label", top_features)]
+
+#  Stratified 5-fold CV on the balanced dataset
+ctrl <- trainControl(method = "cv", number = 5)
+
+rf_model <- train(Source_Label ~ ., 
+                  data = df_reduced,
+                  method = "rf",
+                  trControl = ctrl,
+                  ntree = 500)
+
+# Results
+print(rf_model)
+rf_model$finalModel$confusion
+
+# CONFUSION MATRIX FOR RANDOM FOREST
+# Extract confusion matrix table
+cm_df <- as.data.frame(rf_model$finalModel$confusion)
+cm_df$Reference <- rownames(cm_df)
+cm_long <- melt(cm_df, id.vars = "Reference", variable.name = "Prediction", value.name = "Count")
+
+# Plot heatmap
+ggplot(cm_long, aes(x = Reference, y = Prediction, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 5, color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "steelblue") +
+  labs(title = "Random Forest Confusion Matrix Heatmap (CV Average)",
+       x = "True Class", y = "Predicted Class") +
+  theme_minimal()
+
+# XG BOOST MODEL
+# Define cross-validation strategy and save predictions
+set.seed(123)
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final"  # Save out-of-fold predictions
+)
+
+# Train the XGBoost model using caret
+xgb_model <- train(
+  Source_Label ~ .,
+  data = df_reduced,
+  method = "xgbTree",
+  trControl = ctrl,
+  verbosity = 0
+)
+
+# Extract best tuning parameters
+best_params <- xgb_model$bestTune
+
+# Filter cross-validated predictions for the best hyperparameter combination
+cv_preds_best <- xgb_model$pred %>%
+  filter(eta == best_params$eta,
+         max_depth == best_params$max_depth,
+         nrounds == best_params$nrounds,
+         gamma == best_params$gamma,
+         colsample_bytree == best_params$colsample_bytree,
+         min_child_weight == best_params$min_child_weight,
+         subsample == best_params$subsample)
+
+# Output confusion matrix from predictions
+conf_matrix <- confusionMatrix(cv_preds_best$pred, cv_preds_best$obs)
+print(conf_matrix)
+conf_df <- as.data.frame(conf_matrix$table)
+
+# Plot confusion matrix as heatmap
+ggplot(conf_df, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), size = 5) +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "Confusion Matrix Heatmap (Cross-Validated)",
+       x = "True Label",
+       y = "Predicted Label") +
+  theme_minimal()
+
+# LOG_REG MODEL
+# Prepare data
+df$Source_Label <- as.factor(df$Source_Label)
+df <- df[, !(names(df) %in% c("Sample_ID"))]
+
+# Downsample to balance class sizes
+min_class_size <- df %>%
+  group_by(Source_Label) %>%
+  tally() %>%
+  pull(n) %>%
+  min()
+
+balanced_df <- df %>%
+  group_by(Source_Label) %>%
+  sample_n(min_class_size) %>%
+  ungroup()
+
+# Reduce to top 150 most variable features
+feature_vars <- apply(balanced_df[, -1], 2, var)
+top_features <- names(sort(feature_vars, decreasing = TRUE))[1:150]
+df_reduced <- balanced_df[, c("Source_Label", top_features)]
+
+# Train logistic regression with 5-fold CV
+set.seed(123)
+ctrl <- trainControl(method = "cv", number = 5, savePredictions = "final")
+
+log_model <- train(Source_Label ~ .,
+                   data = df_reduced,
+                   method = "multinom",
+                   trControl = ctrl,
+                   trace = FALSE)
+
+# Confusion matrix from CV predictions
+conf_matrix <- confusionMatrix(log_model$pred$pred, log_model$pred$obs)
+print(conf_matrix)
+
