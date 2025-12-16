@@ -1,25 +1,23 @@
-# This is ALL DONE IN R
-
-# Load in necessary libraries
+```{r setup, include=FALSE}
 library(readxl)
+library(tidyverse)
 library(caret)
-library(nnet)
-library(dplyr)
-library(reshape2)
 library(xgboost)
+library(glmnet)
+library(e1071)
 
-# Load data
-df <- read_excel("[PATH_TO_FILE]/Model_Train_only_1.xlsx") # Excel contains ARGs and amount per sample
-df$Source_Label <- as.factor(df$Source_Label)
-df <- df[, !(names(df) %in% c("Sample_ID"))]
+df <- read_excel("path_to_args_file/ARG_FINAL.xlsx")
+df$Source_Label <- factor(df$Source_Label)
+df$Source_Label <- droplevels(df$Source_Label)
+```
 
-# RANDOM FOREST MODEL CREATION 
-# Downsample to balance classes (match smallest class size)
-min_class_size <- df %>%
+```{r cars}
+# Calculate class size and balance 
+class_counts <- df %>%
   group_by(Source_Label) %>%
-  tally() %>%
-  pull(n) %>%
-  min()
+  tally()
+
+min_class_size <- min(class_counts$n)
 
 set.seed(123)
 balanced_df <- df %>%
@@ -27,115 +25,274 @@ balanced_df <- df %>%
   sample_n(min_class_size) %>%
   ungroup()
 
-df_reduced <- balanced_df#[, c("Source_Label", top_features)]
+model_data <- balanced_df %>%
+  select(-Sample_ID, -any_of(c("Type", "Province", "GeoLocation", "Geo_Location")))
 
-#  Stratified 5-fold CV on the balanced dataset
-ctrl <- trainControl(method = "cv", number = 5)
-
-rf_model <- train(Source_Label ~ ., 
-                  data = df_reduced,
-                  method = "rf",
-                  trControl = ctrl,
-                  ntree = 500)
-
-# Results
-print(rf_model)
-rf_model$finalModel$confusion
-
-# CONFUSION MATRIX FOR RANDOM FOREST
-# Extract confusion matrix table
-cm_df <- as.data.frame(rf_model$finalModel$confusion)
-cm_df$Reference <- rownames(cm_df)
-cm_long <- melt(cm_df, id.vars = "Reference", variable.name = "Prediction", value.name = "Count")
-
-# Plot heatmap
-ggplot(cm_long, aes(x = Reference, y = Prediction, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5, color = "white") +
-  scale_fill_gradient(low = "lightblue", high = "steelblue") +
-  labs(title = "Random Forest Confusion Matrix Heatmap (CV Average)",
-       x = "True Class", y = "Predicted Class") +
-  theme_minimal()
-
-# XG BOOST MODEL
-# Define cross-validation strategy and save predictions
+# Split Data 90/10 using the CLEANED data
 set.seed(123)
+trainIndex <- createDataPartition(model_data$Source_Label, p = .90, 
+                                  list = FALSE, 
+                                  times = 1)
+
+train_data <- model_data[ trainIndex,]
+test_data  <- model_data[-trainIndex,]
+
+print(paste("Training Rows:", nrow(train_data)))
+print(paste("Testing Rows:", nrow(test_data)))
+
+# Train Control (5-fold Cross-validation)
 ctrl <- trainControl(
   method = "cv",
   number = 5,
-  savePredictions = "final"  # Save out-of-fold predictions
+  savePredictions = "final",
+  classProbs = TRUE
 )
 
-# Train the XGBoost model using caret
+
+```{r}
+# RANDOM FOREST
+set.seed(123)
+
+rf_model <- train(
+  Source_Label ~ .,
+  data = train_data,    
+  method = "rf",
+  trControl = ctrl,
+  metric = "Accuracy",
+  importance = TRUE
+)
+confusionMatrix(predict(rf_model, test_data), test_data$Source_Label)
+```
+
+```{r}
+# XGBOOST
+set.seed(123)
+
+xgb_grid <- expand.grid(
+  nrounds = c(100, 200),
+  eta = c(0.05, 0.1),
+  max_depth = c(3, 5, 7),
+  gamma = 0,
+  colsample_bytree = c(0.7, 1),
+  min_child_weight = 1,
+  subsample = c(0.7, 1)
+)
+
 xgb_model <- train(
   Source_Label ~ .,
-  data = df_reduced,
+  data = train_data,
   method = "xgbTree",
+  tuneGrid = xgb_grid,
   trControl = ctrl,
+  metric = "Accuracy",
   verbosity = 0
 )
 
-# Extract best tuning parameters
-best_params <- xgb_model$bestTune
+confusionMatrix(predict(xgb_model, test_data), test_data$Source_Label)
 
-# Filter cross-validated predictions for the best hyperparameter combination
-cv_preds_best <- xgb_model$pred %>%
-  filter(eta == best_params$eta,
-         max_depth == best_params$max_depth,
-         nrounds == best_params$nrounds,
-         gamma == best_params$gamma,
-         colsample_bytree == best_params$colsample_bytree,
-         min_child_weight == best_params$min_child_weight,
-         subsample == best_params$subsample)
-
-# Output confusion matrix from predictions
-conf_matrix <- confusionMatrix(cv_preds_best$pred, cv_preds_best$obs)
-print(conf_matrix)
-conf_df <- as.data.frame(conf_matrix$table)
-
-# Plot confusion matrix as heatmap
-ggplot(conf_df, aes(x = Reference, y = Prediction, fill = Freq)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Freq), size = 5) +
-  scale_fill_gradient(low = "white", high = "red") +
-  labs(title = "Confusion Matrix Heatmap (Cross-Validated)",
-       x = "True Label",
-       y = "Predicted Label") +
-  theme_minimal()
-
-# LOG_REG MODEL
-# Prepare data
-df$Source_Label <- as.factor(df$Source_Label)
-df <- df[, !(names(df) %in% c("Sample_ID"))]
-
-# Downsample to balance class sizes
-min_class_size <- df %>%
-  group_by(Source_Label) %>%
-  tally() %>%
-  pull(n) %>%
-  min()
-
-balanced_df <- df %>%
-  group_by(Source_Label) %>%
-  sample_n(min_class_size) %>%
-  ungroup()
-
-# Reduce to top 150 most variable features
-feature_vars <- apply(balanced_df[, -1], 2, var)
-top_features <- names(sort(feature_vars, decreasing = TRUE))[1:150]
-df_reduced <- balanced_df[, c("Source_Label", top_features)]
-
-# Train logistic regression with 5-fold CV
+```
+# GLMNET
 set.seed(123)
-ctrl <- trainControl(method = "cv", number = 5, savePredictions = "final")
 
-log_model <- train(Source_Label ~ .,
-                   data = df_reduced,
-                   method = "multinom",
-                   trControl = ctrl,
-                   trace = FALSE)
+glmnet_model <- train(
+  Source_Label ~ .,
+  data = train_data,
+  method = "glmnet",
+  family = "multinomial",
+  trControl = ctrl,
+  metric = "Accuracy",
+  tuneLength = 10
+)
+confusionMatrix(predict(glmnet_model, test_data), test_data$Source_Label)
+```
 
-# Confusion matrix from CV predictions
-conf_matrix <- confusionMatrix(log_model$pred$pred, log_model$pred$obs)
-print(conf_matrix)
+```{r}
+# High Impact ARGS
+# RANDOM FOREST
+print("--- Random Forest Top 10 Variables ---")
+rf_imp <- varImp(rf_model, scale = FALSE)
+rf_imp_data <- rf_imp$importance
+
+# Calculate 'Overall' importance for multiclass models
+if (!"Overall" %in% names(rf_imp_data)) {
+  rf_imp_data$Overall <- rowMeans(rf_imp_data)
+}
+
+rf_imp_for_plot <- rf_imp
+rf_imp_for_plot$importance <- rf_imp_data
+plot(rf_imp_for_plot, top = 10, main = "Random Forest: Top 10 Predictors")
+
+print(head(rf_imp_data[order(-rf_imp_data$Overall), , drop = FALSE], 10))
+
+# XGBOOST
+print("--- XGBoost Top 10 Variables ---")
+xgb_imp <- varImp(xgb_model, scale = FALSE)
+xgb_imp_data <- xgb_imp$importance
+
+if (!"Overall" %in% names(xgb_imp_data)) {
+  xgb_imp_data$Overall <- rowMeans(xgb_imp_data)
+}
+
+xgb_imp_for_plot <- xgb_imp
+xgb_imp_for_plot$importance <- xgb_imp_data
+plot(xgb_imp_for_plot, top = 10, main = "XGBoost: Top 10 Predictors")
+
+xgb_top_features <- rownames(xgb_imp_data)[order(-xgb_imp_data$Overall)][1:10]
+print(paste("Most influential feature in XGBoost:", xgb_top_features[1]))
+print(head(xgb_imp_data[order(-xgb_imp_data$Overall), , drop = FALSE], 10))
+
+# GLMNET
+print("--- glmnet Top 10 Variables ---")
+glm_imp <- varImp(glmnet_model, scale = FALSE)
+glm_imp_data <- glm_imp$importance
+
+if (!"Overall" %in% names(glm_imp_data)) {
+  glm_imp_data$Overall <- rowMeans(glm_imp_data)
+}
+
+glm_imp_for_plot <- glm_imp
+glm_imp_for_plot$importance <- glm_imp_data
+plot(glm_imp_for_plot, top = 10, main = "glmnet: Top 10 Predictors")
+
+print(head(glm_imp_data[order(-glm_imp_data$Overall), , drop = FALSE], 10))
+
+# Extract non-zero coefficients for Class 1 (Animals)
+best_lambda <- glmnet_model$bestTune$lambda
+glm_coefs <- coef(glmnet_model$finalModel, glmnet_model$bestTune$lambda)
+
+coef_matrix <- as.matrix(glm_coefs[[1]]) 
+active_predictors <- coef_matrix[coef_matrix[,1] != 0, ]
+print(head(active_predictors))
+
+# Comparsion
+top_rf <- rownames(rf_imp_data)[order(-rf_imp_data$Overall)][1:10]
+top_xgb <- rownames(xgb_imp_data)[order(-xgb_imp_data$Overall)][1:10]
+top_glm <- rownames(glm_imp_data)[order(-glm_imp_data$Overall)][1:10]
+
+common_features <- intersect(intersect(top_rf, top_xgb), top_glm)
+print(common_features)
+```
+
+```{r}
+# PREDICT ON NEW DATA
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Load the new data
+new_data_path <- "path_to_input_directory/test_args.xlsx"
+test_raw <- read_excel(new_data_path)
+
+# Transpose the data (Samples must be rows, Genes must be columns)
+# Extract gene names from the first column
+gene_names <- test_raw[[1]]
+
+# Transpose the numeric part (excluding the first column)
+test_mat <- t(test_raw[,-1])
+colnames(test_mat) <- gene_names
+test_df <- as.data.frame(test_mat)
+
+# Ensure values are numeric
+test_df <- test_df %>% mutate(across(everything(), as.numeric))
+
+# Align features with Training Data
+train_features <- setdiff(names(train_data), "Source_Label")
+
+# Identify genes present in training but missing in the new test data
+missing_genes <- setdiff(train_features, names(test_df))
+
+# Add missing genes to test_df with value 0
+if(length(missing_genes) > 0) {
+  test_df[missing_genes] <- 0
+}
+
+# Reorder columns to match training data exactly and discard extra genes
+test_df_final <- test_df[, train_features]
+
+# GENERATE PROBABILITIES
+
+# Random Forest
+probs_rf <- predict(rf_model, newdata = test_df_final, type = "prob")
+probs_rf$Sample <- rownames(test_df_final)
+probs_rf$Model <- "Random Forest"
+
+# XGBoost
+probs_xgb <- predict(xgb_model, newdata = test_df_final, type = "prob")
+probs_xgb$Sample <- rownames(test_df_final)
+probs_xgb$Model <- "XGBoost"
+
+# GLMNET
+probs_glm <- predict(glmnet_model, newdata = test_df_final, type = "prob")
+probs_glm$Sample <- rownames(test_df_final)
+probs_glm$Model <- "GLMNET"
+
+# Combine and Save Results
+all_predictions <- bind_rows(probs_rf, probs_xgb, probs_glm) %>%
+  select(Sample, Model, everything()) # Reorder columns
+
+# View the first few rows
+print(head(all_predictions))
+
+# Save to Excel
+write_xlsx(all_predictions, "path_to_output_directory/Source_Probabilities.xlsx")
+```
+
+```{r}
+# PREDICT ON ARTIFICIAL DATA 
+
+# Load the artificial data
+art_data_path <- "path_to_input_directory/FINAL_artificial_args.xlsx"
+art_raw <- read_excel(art_data_path)
+
+# Transpose (Flip so Samples are rows)
+# Extract gene names
+art_gene_names <- art_raw[[1]]
+
+# Transpose numeric data
+art_mat <- t(art_raw[,-1])
+colnames(art_mat) <- art_gene_names
+art_df <- as.data.frame(art_mat)
+
+# Ensure numeric format
+art_df <- art_df %>% mutate(across(everything(), as.numeric))
+
+# Align features with Training Data
+train_features <- setdiff(names(train_data), "Source_Label")
+
+# Identify genes present in training but missing in the new data
+missing_genes_art <- setdiff(train_features, names(art_df))
+
+# Add missing genes with value 
+if(length(missing_genes_art) > 0) {
+  art_df[missing_genes_art] <- 0
+}
+
+# Reorder columns to match training data exactly and discard extra genes
+art_df_final <- art_df[, train_features]
+
+# GENERATE PROBABILITIES
+# Random Forest
+probs_rf_art <- predict(rf_model, newdata = art_df_final, type = "prob")
+probs_rf_art$Sample <- rownames(art_df_final)
+probs_rf_art$Model <- "Random Forest"
+
+# XGBoost
+probs_xgb_art <- predict(xgb_model, newdata = art_df_final, type = "prob")
+probs_xgb_art$Sample <- rownames(art_df_final)
+probs_xgb_art$Model <- "XGBoost"
+
+# GLMNET
+probs_glm_art <- predict(glmnet_model, newdata = art_df_final, type = "prob")
+probs_glm_art$Sample <- rownames(art_df_final)
+probs_glm_art$Model <- "GLMNET"
+
+# Combine and Save Results
+all_predictions_art <- bind_rows(probs_rf_art, probs_xgb_art, probs_glm_art) %>%
+  select(Sample, Model, everything())
+
+# View results
+print(head(all_predictions_art))
+
+# Save to Excel
+write_xlsx(all_predictions_art, "path_to_output_directory/FINAL_Artificial_Source_Probabilities.xlsx")
 
