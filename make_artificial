@@ -1,0 +1,67 @@
+#!/bin/bash
+#SBATCH --job-name=[NAME]
+#SBATCH --account=def-[ACCOUNT]
+#SBATCH --time=12:00:00
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mail-user=[EMAIL]
+#SBATCH --mail-type=END,FAIL
+
+module load seqtk
+
+# --------------------------USER SETTINGS
+OUTNAME=""                  # Name of this artificial genome
+R_TARGET=3000000            # Total reads in final mixture
+
+P_HU=33                     # Percentage amount of each genome
+P_AN=33
+P_FR=33
+
+SEED_HU=11
+SEED_AN=11
+SEED_FR=11
+
+POOLDIR="../[POOL LOCATION]"
+OUTDIR="../[DIRECTORY LOCATION]"
+LOGFILE="${OUTDIR}/meta_tracking.tsv"
+# ----------------------------
+
+# Compute reads per category (integer math)
+READS_HU=$(( R_TARGET * P_HU / 100 ))
+READS_AN=$(( R_TARGET * P_AN / 100 ))
+READS_FR=$(( R_TARGET * P_FR / 100 ))
+
+echo "Creating artificial metagenome: $OUTNAME"
+echo "Total reads: $R_TARGET"
+echo "Human:      $READS_HU"
+echo "Animal:     $READS_AN"
+echo "Lakepulse: $READS_FR"
+
+TMP_HU="${OUTDIR}/${OUTNAME}_hu.tmp.fastq"
+TMP_AN="${OUTDIR}/${OUTNAME}_an.tmp.fastq"
+TMP_FR="${OUTDIR}/${OUTNAME}_fr.tmp.fastq"
+FINAL="${OUTDIR}/${OUTNAME}_R1.fastq"
+
+# Sample from each pool using seqtk 
+seqtk sample -s${SEED_HU} "${POOLDIR}/human25_pool_R1.fastq.gz"   $READS_HU > "$TMP_HU"
+seqtk sample -s${SEED_AN} "${POOLDIR}/animal25_pool_R1.fastq.gz"  $READS_AN > "$TMP_AN"
+seqtk sample -s${SEED_FR} "${POOLDIR}/LP25_pool_R1.fastq.gz"   $READS_FR > "$TMP_FR"
+
+# Concatenate to build the artificial metagenome
+cat "$TMP_HU" "$TMP_AN" "$TMP_FR" > "$FINAL"
+
+# Compress final file
+gzip -f "$FINAL"
+
+# Remove temporary chunks
+rm -f "$TMP_HU" "$TMP_AN" "$TMP_FR"
+
+# Log what we did 
+# Write header if log file doesn't exist
+if [ ! -f "$LOGFILE" ]; then
+  echo -e "outname\ttotal_reads\tP_hu\tP_an\tP_fr\treads_hu\treads_an\treads_fr\tseed_hu\tseed_an\tseed_fr" > "$LOGFILE"
+fi
+
+echo -e "${OUTNAME}\t${R_TARGET}\t${P_HU}\t${P_AN}\t${P_FR}\t${READS_HU}\t${READS_AN}\t${READS_FR}\t${SEED_HU}\t${SEED_AN}\t${SEED_FR}" >> "$LOGFILE"
+
+echo "Done: ${OUTDIR}/${OUTNAME}_R1.fastq.gz"
