@@ -1,0 +1,16 @@
+# Generate list for human, animal, and freshwater
+ls path_to_input_directory/trimmed_humanW/*_1.trimmed.fastq.gz | sed 's/_1.trimmed.fastq.gz//' | sort -u > path_to_output_directory/human_list.txt
+ls path_to_input_directory/trimmed_animals/*_1.trimmed.fastq.gz | sed 's/_1.trimmed.fastq.gz//' | sort -u > path_to_output_directory/animal_list.txt
+ls path_to_input_directory/trimmed_LP/*_1.trimmed.fastq.gz | sed 's/_1.trimmed.fastq.gz//' | sort -u > path_to_output_directory/freshwater_list.txt
+
+# Human pool
+zcat ../../trimmed_humanW/*_1.trimmed.fastq.gz > ../pools/human_pool_R1.fastq
+gzip ../pools/human_pool_R1.fastq
+
+# Animal pool
+zcat ../../trimmed_animals/*_1.trimmed.fastq.gz > ../pools/animal_pool_R1.fastq
+gzip ../pools/animal_pool_R1.fastq
+
+# Freshwater pool
+zcat ../../trimmed_LP/*_1.trimmed.fastq.gz > ../pools/LP_pool_R1.fastq
+gzip ../pools/LP_pool_R1.fastq
