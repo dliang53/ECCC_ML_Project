@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=trimm_[FOLDER_NAME]
-#SBATCH --account=def-mhoude           # ComputeCanada Account
+#SBATCH --account=def-[]           # ComputeCanada Account
 #SBATCH --time=24:00:00                
 #SBATCH --mem=200G                     
 #SBATCH --cpus-per-task=16             # More CPU threads
@@ -10,15 +10,20 @@
 #SBATCH --mail-type=ALL                     # Options: BEGIN, END, FAIL, ALL
 
 module load fastp 
-for fq1 in /home/dliang53/scratch/ECCC/data/animals/*_1.fastq.gz; do
-    sample=$(basename "$fq1" _1.fastq.gz)
-    echo "Running fastp on $sample"
+for fq1 in /home/dliang53/scratch/ECCC/data/bison/*_R1.fastq.gz; do
+    fq2=${fq1/_R1.fastq.gz/_R2.fastq.gz} #Find Pair
+    sample=$(basename "$fq1" _R1.fastq.gz)
+
+    echo "Processing sample: $sample"
 
     fastp \
       -i "$fq1" \
-      -o "/home/dliang53/scratch/ECCC/data/trimmed_animals3/${sample}_1.trimmed.fastq.gz" \
+      -I "$fq2" \
+      -o "/home/dliang53/scratch/ECCC/data/[Folder with Data]/${sample}_R1.trimmed.fastq.gz" \
+      -O "/home/dliang53/scratch/ECCC/data/[Folder with Data]/${sample}_R2.trimmed.fastq.gz" \
       --max_len1 100 \
+      --max_len2 100 \
       --thread 16 \
-
+      --detect_adapter_for_pe
 done
 
